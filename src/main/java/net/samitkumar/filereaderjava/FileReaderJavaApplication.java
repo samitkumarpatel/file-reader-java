@@ -1,11 +1,15 @@
 package net.samitkumar.filereaderjava;
 
+import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.annotation.Queue;
 import org.springframework.amqp.rabbit.annotation.RabbitHandler;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.server.RouterFunction;
@@ -18,19 +22,31 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.Map;
+import java.util.UUID;
 
 @SpringBootApplication
+@RequiredArgsConstructor
+@Slf4j
 public class FileReaderJavaApplication {
 
 	public static void main(String[] args) {
 		SpringApplication.run(FileReaderJavaApplication.class, args);
 	}
 
+	final RabbitTemplate template;
+
 	@Bean
 	RouterFunction<ServerResponse> routerFunction() {
 		return RouterFunctions
 				.route()
 				.GET("/details", this::processFile)
+				.POST("/message", request -> {
+					return request
+							.bodyToMono(String.class)
+							.doOnNext(s -> log.info("Message received: {}", s))
+							.mapNotNull(message -> template.convertSendAndReceive("file-reader", "", message))
+							.flatMap(ServerResponse.ok()::bodyValue);
+				})
 				.build();
 	}
 
@@ -47,12 +63,9 @@ public class FileReaderJavaApplication {
 				letters += line.replaceAll("\\s", "").length();
 			}
 		} catch (IOException e) {
-			e.printStackTrace();
+			log.error("Error reading file", e);
 		}
-
-		System.out.println("Lines: " + lines);
-		System.out.println("Words: " + words);
-		System.out.println("Letters: " + letters);
+		log.info("Read {} words , {} letters and {} lines from file {}", words, letters, lines, filename);
 
 		var x = new FileReaderDetails(lines, words, letters);
 		return Mono.fromCallable(() -> Map.of(
@@ -68,7 +81,7 @@ public class FileReaderJavaApplication {
 
 record FileReaderDetails(int lines, int words, int letters){}
 
-@RabbitListener(queues = "hello")
+@RabbitListener(queues = "file-reader-java")
 @Component
 class RabbitMqReceiver {
 
