@@ -3,15 +3,14 @@ package net.samitkumar.filereaderjava;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.amqp.rabbit.annotation.Queue;
-import org.springframework.amqp.rabbit.annotation.RabbitHandler;
-import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.connection.CorrelationData;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.ApplicationEvent;
 import org.springframework.context.annotation.Bean;
-import org.springframework.stereotype.Component;
+import org.springframework.context.event.EventListener;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerRequest;
@@ -22,7 +21,6 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.Map;
-import java.util.UUID;
 
 @SpringBootApplication
 @RequiredArgsConstructor
@@ -33,7 +31,7 @@ public class FileReaderJavaApplication {
 		SpringApplication.run(FileReaderJavaApplication.class, args);
 	}
 
-	final RabbitTemplate template;
+	final ReactiveRedisTemplate<String, String> redisTemplate;
 
 	@Bean
 	RouterFunction<ServerResponse> routerFunction() {
@@ -43,11 +41,18 @@ public class FileReaderJavaApplication {
 				.POST("/message", request -> {
 					return request
 							.bodyToMono(String.class)
-							.doOnNext(s -> log.info("Message received: {}", s))
-							.mapNotNull(message -> template.convertSendAndReceive("file-reader", "", message))
+							.flatMap(s -> redisTemplate.convertAndSend("channel", s))
+							.map(l -> Map.of("status", "SUCCESS", "l", l))
 							.flatMap(ServerResponse.ok()::bodyValue);
 				})
 				.build();
+	}
+
+	@EventListener
+	public void onApplicationEvent(ApplicationReadyEvent event) {
+		redisTemplate.listenToChannel("channel")
+				.doOnNext(message -> log.info("[*] Received Message: {}", message))
+				.subscribe();
 	}
 
 	@SneakyThrows
@@ -81,12 +86,3 @@ public class FileReaderJavaApplication {
 
 record FileReaderDetails(int lines, int words, int letters){}
 
-@RabbitListener(queues = "file-reader-java")
-@Component
-class RabbitMqReceiver {
-
-	@RabbitHandler
-	public void receive(String in) {
-		System.out.println(" [x] Received '" + in + "'");
-	}
-}
