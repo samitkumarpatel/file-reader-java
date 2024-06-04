@@ -49,6 +49,9 @@ public class FileReaderJavaApplication {
 	@Value("${spring.application.file.upload.path}")
 	private String fileUploadPath;
 
+	@Value("${spring.application.file.lookup.path}")
+	private String fileLookUpPath;
+
 	@Bean
 	Sinks.Many<String> sinks(){
 		return Sinks.many().multicast().onBackpressureBuffer();
@@ -84,7 +87,7 @@ public class FileReaderJavaApplication {
 				.map(stringPartMap -> stringPartMap.get("file"))
 				.cast(FilePart.class)
 				.flatMap(this::fileUploadToDisk)
-				.flatMap(filePart -> redisTemplate.convertAndSend("channel", Path.of(fileUploadPath).resolve(filePart.filename()).toString()))
+				.flatMap(filePart -> redisTemplate.convertAndSend("channel", filePart.filename()))//spring.application.file.upload.path=${FILE_LOOKUP_PATH:/tmp/upload}
 				.then(ServerResponse.ok().bodyValue(Map.of("status", "SUCCESS")))
 				.onErrorResume(ex -> ServerResponse
 					.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -99,12 +102,6 @@ public class FileReaderJavaApplication {
 
 	@EventListener
 	public void onApplicationEvent(ApplicationReadyEvent event) {
-		/*redisTemplate.listenToChannel("channel")
-				.doOnNext(message -> log.info("[*] Received Message: {}", message))
-				.doOnNext(message -> sinks().tryEmitNext("Got the file Information, Processing It..."))
-				.flatMap(message -> processFile(message.getMessage()).map(fileReaderDetails -> sinks().tryEmitNext(fileReaderDetails)))
-				.subscribe();*/
-
 		redisTemplate
 				.listenToChannel("channel")
 				.doOnNext(processedMessage -> log.info("[*] Received Message: {}", processedMessage))
@@ -115,10 +112,10 @@ public class FileReaderJavaApplication {
 	}
 
 	@SneakyThrows
-	private void processFile(String filePath) {
+	private void processFile(String fileName) {
 		int lines = 0, words = 0, letters = 0;
 
-		try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+		try (BufferedReader reader = new BufferedReader(new FileReader(fileLookUpPath+ "/" + fileName))) {
 			String line;
 			while ((line = reader.readLine()) != null) {
 				lines++;
@@ -128,7 +125,7 @@ public class FileReaderJavaApplication {
 		} catch (IOException e) {
 			log.error("Error reading file", e);
 		}
-		log.info("Read {} words , {} letters and {} lines from file {}", words, letters, lines, filePath);
+		log.info("Read {} words , {} letters and {} lines from file {}", words, letters, lines, fileName);
 
 		var x = new FileReaderDetails(lines, words, letters);
 		var result = Map
