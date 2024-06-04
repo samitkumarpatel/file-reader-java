@@ -7,15 +7,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.ApplicationEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Component;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.HandlerMapping;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
@@ -31,9 +26,12 @@ import reactor.core.scheduler.Schedulers;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Stream;
 
 @SpringBootApplication
 @RequiredArgsConstructor
@@ -45,9 +43,6 @@ public class FileReaderJavaApplication {
 	}
 
 	final ReactiveRedisTemplate<String, String> redisTemplate;
-
-	@Value("${spring.application.file.upload.path}")
-	private String fileUploadPath;
 
 	@Value("${spring.application.file.lookup.path}")
 	private String fileLookUpPath;
@@ -61,15 +56,14 @@ public class FileReaderJavaApplication {
 	RouterFunction<ServerResponse> routerFunction() {
 		return RouterFunctions
 				.route()
-				.POST("/message/to/channel", request -> {
-					return request
-							.bodyToMono(String.class)
-							.flatMap(s -> redisTemplate.convertAndSend("channel", s))
-							.map(l -> Map.of("status", "SUCCESS", "l", l))
-							.flatMap(ServerResponse.ok()::bodyValue);
-				})
-				.POST("/file/upload", this::upload)
+				.GET("/ping", request -> ServerResponse.ok().bodyValue(Map.of("status", "UP")))
+				.GET("/details", this::fileReader)
 				.build();
+	}
+
+	private Mono<ServerResponse> fileReader(ServerRequest request) {
+		var fileName = request.queryParam("filename").orElseThrow();
+		return ServerResponse.ok().bodyValue(processFile(fileName));
 	}
 
 	@Bean
@@ -80,44 +74,34 @@ public class FileReaderJavaApplication {
 		return new SimpleUrlHandlerMapping(map, order);
 	}
 
-	private Mono<ServerResponse> upload(ServerRequest request) {
-		return request
-				.multipartData()
-				.map(MultiValueMap::toSingleValueMap)
-				.map(stringPartMap -> stringPartMap.get("file"))
-				.cast(FilePart.class)
-				.flatMap(this::fileUploadToDisk)
-				.flatMap(filePart -> redisTemplate.convertAndSend("channel", filePart.filename()))//spring.application.file.upload.path=${FILE_LOOKUP_PATH:/tmp/upload}
-				.then(ServerResponse.ok().bodyValue(Map.of("status", "SUCCESS")))
-				.onErrorResume(ex -> ServerResponse
-					.status(HttpStatus.INTERNAL_SERVER_ERROR)
-						.bodyValue(Map.of("status", "ERROR", "message", ex.getMessage()))
-		);
-	}
-
-	private Mono<FilePart> fileUploadToDisk(FilePart filePart) {
-		return filePart.transferTo(Path.of(fileUploadPath).resolve(filePart.filename()))
-				.thenReturn(filePart);
-	}
-
 	@EventListener
 	public void onApplicationEvent(ApplicationReadyEvent event) {
 		redisTemplate
 				.listenToChannel("channel")
 				.doOnNext(processedMessage -> log.info("[*] Received Message: {}", processedMessage))
 				.doOnNext(processedMessage -> sinks().tryEmitNext("Got the file Information, Processing It..."))
-				.doOnNext(processedMessage -> processFile(processedMessage.getMessage()))
+				.doOnNext(processedMessage -> processFileAndEmit(processedMessage.getMessage()))
 				.subscribeOn(Schedulers.parallel(), true)
 				.subscribe();
 	}
 
 	@SneakyThrows
-	private void processFile(String fileName) {
+	private void processFileAndEmit(String fileName) {
+		var fileReaderDetails = processFile(fileName);
+		var result = Map.of(
+						"lines", fileReaderDetails.lines(),
+						"words", fileReaderDetails.words(),
+						"letters", fileReaderDetails.letters()
+		).toString();
+		//Thread.sleep(2000);
+		sinks().tryEmitNext(result);
+	}
+
+	public FileReaderDetails processFile(String fileName) {
 		int lines = 0, words = 0, letters = 0;
 
-		try (BufferedReader reader = new BufferedReader(new FileReader(fileLookUpPath+ "/" + fileName))) {
-			String line;
-			while ((line = reader.readLine()) != null) {
+		try (Stream<String> stream = Files.lines(Paths.get(fileLookUpPath, fileName), StandardCharsets.UTF_8)) {
+			for (String line : (Iterable<String>) stream::iterator) {
 				lines++;
 				words += line.split("\\s+").length;
 				letters += line.replaceAll("\\s", "").length();
@@ -125,17 +109,8 @@ public class FileReaderJavaApplication {
 		} catch (IOException e) {
 			log.error("Error reading file", e);
 		}
-		log.info("Read {} words , {} letters and {} lines from file {}", words, letters, lines, fileName);
-
-		var x = new FileReaderDetails(lines, words, letters);
-		var result = Map
-				.of(
-						"lines", x.lines(),
-						"words", x.words(),
-						"letters", x.letters()
-				).toString();
-		//Thread.sleep(2000);
-		sinks().tryEmitNext(result);
+		log.info("Read {} words, {} letters, and {} lines from file {}", words, letters, lines, fileName);
+		return new FileReaderDetails(lines, words, letters);
 	}
 }
 
