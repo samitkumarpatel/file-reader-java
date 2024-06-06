@@ -41,6 +41,7 @@ jobs:
     - name: Docker build
       run: |
         ./mvnw -B spring-boot:build-image \
+              -DskipTests \
               -Dspring-boot.build-image.imageName=ghcr.io/${{ github.repository }}:${{github.run_id}}
         docker tag ghcr.io/${{ github.repository }}:${{github.run_id}} ghcr.io/${{ github.repository }}:main
         docker images
