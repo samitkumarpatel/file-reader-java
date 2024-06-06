@@ -29,15 +29,15 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # - name: Extract metadata (tags, labels) for Docker
-    #   id: meta
-    #   uses: docker/metadata-action@v5
-    #   with:
-    #     images: |
-    #       ghcr.io/${{ github.repository }}
-    #     tags: |
-    #       type=raw,value=${{github.run_id}}
-    #       type=ref,event=branch
+    - name: Extract metadata (tags, labels) for Docker
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: |
+          ghcr.io/${{ github.repository }}
+        tags: |
+          type=raw,value=${{github.run_id}}
+          type=ref,event=branch
     - name: Docker build
       run: |
         ./mvnw -B spring-boot:build-image \
@@ -45,13 +45,12 @@ jobs:
               -Dspring-boot.build-image.imageName=ghcr.io/${{ github.repository }}:${{github.run_id}}
         docker tag ghcr.io/${{ github.repository }}:${{github.run_id}} ghcr.io/${{ github.repository }}:main
         docker images
-    # - name: Build and push Docker images
-    #   id: push
-    #   uses: docker/build-push-action@v5
-    #   with:
-    #     context: .
-    #     push: true
-    #     tags: ${{ steps.meta.outputs.tags }}
-    #     labels: ${{ steps.meta.outputs.labels }}
-    - name: docker push
-      run: docker push -a ghcr.io/${{ github.repository }}
+    - name: Build and push Docker images
+      id: push
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+#    - name: docker push
+#      run: docker push -a ghcr.io/${{ github.repository }}
