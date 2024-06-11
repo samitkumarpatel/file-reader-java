@@ -1,5 +1,6 @@
 package net.samitkumar.filereaderjava;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -43,7 +44,7 @@ public class FileReaderJavaApplication {
 	}
 
 	final ReactiveRedisTemplate<String, String> redisTemplate;
-
+	final ObjectMapper objectMapper;
 	@Value("${spring.application.file.lookup.path}")
 	private String fileLookUpPath;
 
@@ -79,20 +80,15 @@ public class FileReaderJavaApplication {
 		redisTemplate
 				.listenToChannel("channel")
 				.doOnNext(processedMessage -> log.info("[*] Received Message: {}", processedMessage))
-				.doOnNext(processedMessage -> sinks().tryEmitNext("Got the file Information, Processing It..."))
+				.doOnNext(processedMessage -> Mono.fromRunnable(() -> sinks().tryEmitNext("Got the file Information, Processing It...")).subscribeOn(Schedulers.parallel()).subscribe() )
 				.doOnNext(processedMessage -> processFileAndEmit(processedMessage.getMessage()))
-				.subscribeOn(Schedulers.parallel(), true)
 				.subscribe();
 	}
 
 	@SneakyThrows
 	private void processFileAndEmit(String fileName) {
 		var fileReaderDetails = processFile(fileName);
-		var result = Map.of(
-						"lines", fileReaderDetails.lines(),
-						"words", fileReaderDetails.words(),
-						"letters", fileReaderDetails.letters()
-		).toString();
+		var result = objectMapper.writeValueAsString(fileReaderDetails);
 		//Thread.sleep(2000);
 		sinks().tryEmitNext(result);
 	}
@@ -108,6 +104,7 @@ public class FileReaderJavaApplication {
 			}
 		} catch (IOException e) {
 			log.error("Error reading file", e);
+			sinks().tryEmitNext("Error reading file");
 		}
 		log.info("Read {} words, {} letters, and {} lines from file {}", words, letters, lines, fileName);
 		return new FileReaderDetails(lines, words, letters);
