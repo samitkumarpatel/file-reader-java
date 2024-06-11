@@ -96,7 +96,7 @@ public class FileReaderJavaApplication {
 	public FileReaderDetails processFile(String fileName) {
 		int lines = 0, words = 0, letters = 0;
 
-		try (Stream<String> stream = Files.lines(Paths.get(fileLookUpPath, fileName), StandardCharsets.UTF_8)) {
+		try (Stream<String> stream = Files.lines(Paths.get(fileLookUpPath, fileName), StandardCharsets.ISO_8859_1)) {
 			for (String line : (Iterable<String>) stream::iterator) {
 				lines++;
 				words += line.split("\\s+").length;
